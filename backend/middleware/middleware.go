@@ -47,16 +47,21 @@ var DeviceLimiter = NewRateLimiter(30, 120)
 
 // Chain applies all security middleware in the correct order:
 //
-//	Recover → SecurityHeaders → JWT → RateLimit → APIKey → Logging → handler
+//	Recover → SecurityHeaders → JWT → RateLimit → Signature → APIKey → Logging → handler
 //
-// JWT runs before RateLimit so device_id is available for per-device limiting.
+// Order rationale:
+//   JWT runs before RateLimit so device_id is available for per-device limits.
+//   RateLimit runs before Signature so rate-limited requests never hit the DB.
+//   Signature runs before APIKey so forged requests are rejected early.
 func Chain(next http.Handler) http.Handler {
 	return recoverMiddleware(
 		securityHeaders(
 			jwtMiddleware(
 				rateLimitMiddleware(
-					apiKeyMiddleware(
-						loggingMiddleware(next),
+					signatureMiddleware(
+						apiKeyMiddleware(
+							loggingMiddleware(next),
+						),
 					),
 				),
 			),
@@ -90,8 +95,8 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Access-Control-Allow-Origin", "null")
 		h.Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-		// Phase 3+: include Authorization so the app can send Bearer tokens
-		h.Set("Access-Control-Allow-Headers", "Content-Type, X-Api-Key, Authorization")
+		// Phase 3+: Authorization for Bearer tokens; Phase 5: X-Signature for request signing
+		h.Set("Access-Control-Allow-Headers", "Content-Type, X-Api-Key, Authorization, X-Signature")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
